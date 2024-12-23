@@ -1,0 +1,81 @@
+services:
+  auth-service:
+    build:
+      context: ./app/auth-service
+      dockerfile: Dockerfile
+    container_name: auth-service
+
+    ports:
+      - "8000:8000"
+    environment:
+      - DB_URL=postgres://dms_user:dms_password@postgres:5432/dms
+      - REDIS_URL=redis:6379
+      - RABBITMQ_URL=amqp://rabbitmq:rabbitmq@rabbitmq:5672/
+      - PRIVATE_KEY_PATH=/keys/private_key.pem
+    depends_on:
+      - postgres
+      - redis
+    # volumes:
+    #   - /users/amine/keys:/keys
+    networks:
+      - app_network
+
+  file-service:
+    build:
+      context: ./app/file-service
+      dockerfile: Dockerfile
+    container_name: file-service
+    command: ["-listen=:8001", "-text=File Service"]
+    depends_on:
+      - postgres
+      - minio
+    ports:
+      - "8001:8001"
+    environment:
+      - PUBLIC_KEY_PATH=/keys/public_key.pem
+    # volumes:
+    #   - /users/amine/keys:/keys
+    networks:
+      - app_network
+
+  company-service:
+    build:
+      context: ./app/company-service
+      dockerfile: Dockerfile
+    container_name: company-service
+    command: ["-listen=:8002", "-text=Company Service"]
+    depends_on:
+      - postgres
+    ports:
+      - "8002:8002"
+    environment:
+      - PUBLIC_KEY_PATH=/keys/public_key.pem
+    # volumes:
+    #   - /users/amine/keys:/keys
+    networks:
+      - app_network
+
+  user-service:
+    build:
+      context: ./app/user-service
+      dockerfile: Dockerfile
+    container_name: user-service
+    command: ["-listen=:8003", "-text=User Service"]
+    ports:
+      - "8003:8003"
+    environment:
+      - DB_URL=postgres://dms_user:dms_password@postgres:5432/dms
+      - REDIS_URL=redis:6379
+      - RABBITMQ_URL=amqp://rabbitmq:rabbitmq@rabbitmq:5672/
+      - PUBLIC_KEY_PATH=/keys/public_key.pem
+    depends_on:
+      - postgres
+      - redis
+    # volumes:
+    #   - /users/amine/keys:/keys
+    networks:
+      - app_network
+
+networks:
+  app_network:
+    driver: bridge

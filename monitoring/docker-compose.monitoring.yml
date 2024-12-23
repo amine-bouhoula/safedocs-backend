@@ -1,0 +1,79 @@
+services:
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    networks:
+      - app_network
+
+  nginx-exporter:
+    image: nginx/nginx-prometheus-exporter:latest
+    container_name: nginx_exporter
+    ports:
+      - "9113:9113"
+    # depends_on:
+    #   - nginx
+    command: ["-nginx.scrape-uri=http://nginx/stub_status"]
+    networks:
+      - app_network
+
+  postgres-exporter:
+    image: bitnami/postgres-exporter:latest
+    container_name: postgres_exporter
+    ports:
+      - "9187:9187" # Default port for PostgreSQL Exporter
+    environment:
+      DATA_SOURCE_NAME: postgres://dms_user:dms_password@postgres:5432/dms?sslmode=disable
+    # depends_on:
+    #   - postgres
+    networks:
+      - app_network
+  
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    user: "472:472"  # Run as Grafana's internal UID:GID
+    restart: unless-stopped
+    # depends_on:
+    #   - prometheus
+    networks:
+      - app_network
+
+  loki:
+    image: grafana/loki:2.8.0
+    container_name: loki
+    ports:
+      - "3100:3100"
+    networks:
+      - app_network
+
+  promtail:
+    image: grafana/promtail:latest
+    container_name: promtail
+    ports:
+      - "9080:9080"       # HTTP Metrics
+      - "37857:37857"     # gRPC Endpoint
+    volumes:
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro  # Mount container logs
+      - ./promtail-config.yml:/etc/promtail/config.yml            # Mount Promtail config
+      - ./positions.yaml:/tmp/positions.yaml                     # Mount positions file
+    command:
+      - -config.file=/etc/promtail/config.yml
+      - -log.level=debug
+    restart: unless-stopped
+    networks:
+      - app_network
+      
+volumes:
+  grafana-data:
+    
+networks:
+  app_network:
+    driver: bridge

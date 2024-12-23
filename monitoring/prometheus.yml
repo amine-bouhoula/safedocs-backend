@@ -1,0 +1,26 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: "nginx"
+    static_configs:
+      - targets: ["nginx-exporter:9113"]
+
+  - job_name: "postgres"
+    static_configs:
+      - targets: ["postgres-exporter:9187"]
+
+  - job_name: "minio"
+    metrics_path: /minio/v2/metrics/cluster
+    static_configs:
+      - targets: ["minio:9001"]
+    basic_auth:
+      username: "minioadmin" # Replace with MINIO_ROOT_USER
+      password: "minioadmin" # Replace with MINIO_ROOT_PASSWORD
+
+  - job_name: "backend"
+    static_configs:
+      - targets:
+          - auth-service:8000
+          - file-service:8001
+
