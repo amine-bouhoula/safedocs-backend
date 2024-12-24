@@ -105,7 +105,7 @@ func (s *StorageService) UploadFile(file io.Reader, fileID, fileName, contentTyp
 	return fileID, info.VersionID, nil
 }
 
-func (s *StorageService) GetFile(bucketName, objectName string) (*minio.Object, string, error) {
+func (s *StorageService) GetFileObject(bucketName, objectName string) (*minio.Object, string, error) {
 	ctx := context.Background()
 
 	// Retrieve the object

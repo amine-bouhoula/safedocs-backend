@@ -2,15 +2,13 @@ package api
 
 import (
 	"bytes"
-	"crypto/rand"
-	"encoding/hex"
+	"errors"
+	"file-service/internal/models"
 	fileservices "file-service/internal/services"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"net/http"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +18,7 @@ import (
 	"github.com/amine-bouhoula/safedocs-mvp/sdlib/services"
 	"github.com/gin-contrib/cors"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -92,6 +91,13 @@ func StartServer(cfg *config.Config, log *zap.Logger) {
 	}
 	log.Info("Metadata service initialized successfully")
 
+	log.Info("Initialzing permissions service")
+	permissionsService := fileservices.NewPermissionsService(database.DB, log)
+	if permissionsService == nil {
+		log.Fatal("Failed to initialize permissions service")
+	}
+	log.Info("Permissions service initialized successfully")
+
 	// Load the RSA public key
 	log.Info("Loading RSA public key", zap.String("public_key_path", cfg.PublicKeyPath))
 	publicKey, err := services.LoadPublicKey(cfg.PublicKeyPath)
@@ -107,10 +113,6 @@ func StartServer(cfg *config.Config, log *zap.Logger) {
 	// Define /metrics endpoint
 	router.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
-	router.POST("/api/v1/files/start-upload", func(c *gin.Context) {
-		startUpload(c, log)
-	})
-
 	// Define routes
 	log.Info("Defining routes")
 	router.POST("/api/v1/files/upload", func(c *gin.Context) {
@@ -119,7 +121,7 @@ func StartServer(cfg *config.Config, log *zap.Logger) {
 	})
 
 	router.GET("/api/v1/files/list", func(c *gin.Context) {
-		log.Info("Handling /download request", zap.String("method", c.Request.Method), zap.String("path", c.Request.URL.Path))
+		log.Info("Handling /list request", zap.String("method", c.Request.Method), zap.String("path", c.Request.URL.Path))
 		fileslisterHandler(c, metadataService, log)
 	})
 
@@ -134,9 +136,15 @@ func StartServer(cfg *config.Config, log *zap.Logger) {
 		ws.HandleConnection(c, publicKey)
 	})
 
-	router.GET("/api/v1/files/download/:bucket/:file", func(c *gin.Context) {
+	router.GET("/api/v1/files/download/:fileID", func(c *gin.Context) {
 		log.Info("Handling /download request", zap.String("method", c.Request.Method), zap.String("path", c.Request.URL.Path))
-		downloadFileHandler(c, storageService)
+		downloadFileHandler(c, metadataService, permissionsService, storageService)
+	})
+
+	router.PUT("/api/v1/files/share/:fileID/:sharedWithID", func(c *gin.Context) {
+		log.Info("Handler /share request", zap.String("method", c.Request.Method), zap.String("path", c.Request.URL.Path))
+		ShareFileHandler(c, metadataService, permissionsService, log)
+
 	})
 
 	// Start the server
@@ -147,28 +155,54 @@ func StartServer(cfg *config.Config, log *zap.Logger) {
 	}
 }
 
-func downloadFileHandler(c *gin.Context, storageService *fileservices.StorageService) {
-	bucketName := c.Param("bucket")
-	fileName := c.Param("file")
+func downloadFileHandler(c *gin.Context, metadata *fileservices.MetadataService, permissions *fileservices.PermissionsService, storageService *fileservices.StorageService) {
+	bucketName := "files" // c.Param("bucket")
+	fileID := c.Param("fileID")
+
+	userID, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "UserID not found in context"})
+		return
+	}
+
+	userIDStr, ok := userID.(string)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "UserID is not of type string"})
+		return
+	}
+	isAllowed, err := permissions.IsActionAllowed(fileID, userIDStr, models.PermissionRead)
+	if err != nil || !isAllowed {
+		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+		return
+	}
+
+	file, err := metadata.GetFileByID(fileID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to download file: " + err.Error()})
+		return
+	}
 
 	// Get the file and its content type
-	object, contentType, err := storageService.GetFile(bucketName, fileName)
+	object, contentType, err := storageService.GetFileObject(bucketName, fileID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to download file: " + err.Error()})
 		return
 	}
 	defer object.Close()
 
-	// Set appropriate headers
-	c.Header("Content-Disposition", "attachment; filename="+filepath.Base(fileName))
+	// Set appropriate headers for binary file download
+	c.Header("Content-Disposition", "attachment; filename="+filepath.Base(fileID))
 	c.Header("Content-Type", contentType)
+	c.Header("Content-Transfer-Encoding", "binary") // Ensures the content is treated as binary
 
-	// Stream the object directly to the response
-	_, err = io.Copy(c.Writer, object)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to stream file: " + err.Error()})
-		return
-	}
+	c.JSON(http.StatusFound, gin.H{
+		"Name":       file.FileName,
+		"Size":       file.Size,
+		"CreatedBy":  file.CreatedBy,
+		"CreatedAt":  file.CreatedAt,
+		"Version":    file.VersionID,
+		"Permission": "Read",
+	})
 }
 
 func listFileVersionsHandler(c *gin.Context, storage *fileservices.StorageService) {
@@ -182,88 +216,6 @@ func listFileVersionsHandler(c *gin.Context, storage *fileservices.StorageServic
 	}
 
 	c.JSON(http.StatusOK, versions)
-}
-
-// StartUpload initializes an upload session
-func startUpload(c *gin.Context, log *zap.Logger) {
-	var request []struct {
-		FileName  string `json:"fileName"`
-		FileSize  int64  `json:"fileSize"`
-		ChunkSize int64  `json:"chunkSize"`
-	}
-
-	log.Info("Received request to start multiple upload sessions", zap.String("clientIP", c.ClientIP()))
-
-	// Parse request body
-	if err := c.ShouldBindJSON(&request); err != nil {
-		log.Error("Failed to parse request body", zap.Error(err))
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request payload"})
-		return
-	}
-
-	// Initialize response
-	uploadResponses := []map[string]interface{}{}
-
-	for _, file := range request {
-		// Validate fileName and fileSize
-		if file.FileName == "" || file.FileSize <= 0 {
-			log.Error("Invalid fileName or fileSize",
-				zap.String("fileName", file.FileName),
-				zap.Int64("fileSize", file.FileSize))
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid fileName or fileSize"})
-			return
-		}
-
-		// Default chunk size to 5MB if not provided
-		if file.ChunkSize <= 0 {
-			file.ChunkSize = 5 * 1024 * 1024 // 5MB
-			log.Info("Default chunk size applied", zap.Int64("chunkSize", file.ChunkSize))
-		}
-
-		// Generate a unique upload session ID
-		uploadSessionId := generateSessionID()
-		log.Info("Generated unique upload session ID", zap.String("uploadSessionId", uploadSessionId))
-
-		// Create a new upload session
-		uploadSession := &UploadSession{
-			FileName:       file.FileName,
-			FileSize:       file.FileSize,
-			ChunkSize:      file.ChunkSize,
-			UploadedChunks: make(map[int]bool),
-			CreatedAt:      time.Now(),
-		}
-
-		// Store the session in memory
-		uploadSessions.Lock()
-		uploadSessions.Sessions[uploadSessionId] = uploadSession
-		uploadSessions.Unlock()
-		log.Info("Upload session created successfully",
-			zap.String("uploadSessionId", uploadSessionId),
-			zap.String("fileName", file.FileName),
-			zap.Int64("fileSize", file.FileSize),
-			zap.Int64("chunkSize", file.ChunkSize),
-		)
-
-		// Add the session details to the response
-		uploadResponses = append(uploadResponses, map[string]interface{}{
-			"uploadSessionId": uploadSessionId,
-			"fileName":        file.FileName,
-			"chunkSize":       file.ChunkSize,
-		})
-	}
-
-	// Respond with all session IDs and chunk sizes
-	c.JSON(http.StatusOK, gin.H{
-		"uploadSessions": uploadResponses,
-	})
-	log.Info("Response sent successfully", zap.Int("uploadSessionCount", len(uploadResponses)))
-}
-
-// Helper function to generate a random session ID
-func generateSessionID() string {
-	bytes := make([]byte, 16)
-	_, _ = rand.Read(bytes)
-	return hex.EncodeToString(bytes)
 }
 
 func singleFileUploadHandler(c *gin.Context, storage *fileservices.StorageService, metadata *fileservices.MetadataService, log *zap.Logger) {
@@ -314,7 +266,13 @@ func singleFileUploadHandler(c *gin.Context, storage *fileservices.StorageServic
 		return
 	}
 
-	var uploadedFiles []string
+	type uploadedFile struct {
+		Size int64
+		Name string
+		ID   string
+	}
+
+	var uploadedFiles []uploadedFile
 
 	for _, file := range files {
 		// Check file size
@@ -334,33 +292,6 @@ func singleFileUploadHandler(c *gin.Context, storage *fileservices.StorageServic
 		defer fileContent.Close()
 
 		fileID := uuid.New().String()
-		fileSizeStr := c.PostForm("fileSize")
-
-		var multiplier int64
-		if strings.HasSuffix(fileSizeStr, "MB") {
-			multiplier = 1 // File size is already in MB
-			fileSizeStr = strings.TrimSuffix(fileSizeStr, "MB")
-		} else if strings.HasSuffix(fileSizeStr, "GB") {
-			multiplier = 1024 // 1 GB = 1024 MB
-			fileSizeStr = strings.TrimSuffix(fileSizeStr, "GB")
-		} else {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error": "Invalid file size. Must end with 'MB' or 'GB'.",
-			})
-			return
-		}
-
-		// Parse the numeric part of the file size
-		fileSizeNumber, err := strconv.ParseFloat(fileSizeStr, 64)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error": "Invalid file size. Must be a valid number.",
-			})
-			return
-		}
-
-		// Convert megabytes to bytes
-		fileSizeBytes := int64(fileSizeNumber*1024*1024) * multiplier
 
 		// Upload file to MinIO
 		objectName := fmt.Sprintf("%d_%s", time.Now().UnixNano(), file.Filename)
@@ -374,14 +305,14 @@ func singleFileUploadHandler(c *gin.Context, storage *fileservices.StorageServic
 		log.Info("Merged file uploaded successfully", zap.String("fileID", fileID), zap.String("file version", fileVersion))
 
 		// Save metadata
-		err = metadata.SaveFileMetadata(userIDStr, fileID, file.Filename, fileVersion, fileSizeBytes)
+		err = metadata.SaveFileMetadata(userIDStr, fileID, file.Filename, fileVersion, file.Size)
 		if err != nil {
 			log.Error("Failed to save file metadata", zap.Error(err))
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save file metadata"})
 			return
 		}
 
-		uploadedFiles = append(uploadedFiles, objectName)
+		uploadedFiles = append(uploadedFiles, uploadedFile{file.Size, objectName, fileID})
 
 		// Log and respond
 		duration := time.Since(startTime)
@@ -480,6 +411,62 @@ func singleFileDeleteHandler(c *gin.Context, metadata *fileservices.MetadataServ
 		log.Error("Failed to fetch files", zap.String("userID", userIDStr), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve files"})
 		return
+	}
+
+}
+
+func ShareFileHandler(c *gin.Context, metadata *fileservices.MetadataService, permissions *fileservices.PermissionsService, log *zap.Logger) {
+
+	fileID := c.Param("fileID")
+	sharedWithID := c.Param("sharedWithID")
+
+	userID, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "UserID not found in context"})
+		return
+	}
+
+	userIDStr, ok := userID.(string)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "UserID is not of type string"})
+		return
+	}
+
+	// Lets first check if the userid is the creator of the file through the metadata
+	file, err := metadata.GetFileByID(fileID)
+	if err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			log.Error("Authorization header is missing")
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization header is required"})
+			return
+		}
+	}
+
+	if file.CreatedBy == userID {
+		err := permissions.AddNewPermission(fileID, userIDStr, sharedWithID, models.PermissionRead)
+		if err == nil {
+			c.JSON(http.StatusAccepted, gin.H{"msg": "File shared successfully"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal error" + err.Error()})
+		}
+		return
+	}
+
+	// anyone with write permission can also share the file, so check the permission = write for userid/fileid
+	isAllowed, err := permissions.IsActionAllowed(fileID, userIDStr, models.PermissionRead)
+	if err != nil || !isAllowed {
+		c.JSON(http.StatusForbidden, gin.H{"error": "You dont have permission to download the file"})
+		return
+	}
+
+	// if all okay, lets add a new line to permissions table
+	if file.CreatedBy == userIDStr || isAllowed || file.CreatedBy == userID {
+		err := permissions.AddNewPermission(fileID, userIDStr, sharedWithID, models.PermissionRead)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal error" + err.Error()})
+		}
+	} else {
+		c.JSON(http.StatusForbidden, gin.H{"error": "You dont have the permission to share this folder"})
 	}
 
 }

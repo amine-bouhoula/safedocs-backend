@@ -16,5 +16,7 @@ type FileMetadata struct {
 	CreatedAt     time.Time `gorm:"autoCreateTime"` // Automatically set when a record is created
 	CreatedBy     string    `gorm:"not null"`       // User who created the file
 	SharedWith    []string  `gorm:"-"`              // List of users the file is shared with (not stored in DB)
-	SharedWithRaw string    `gorm:"type:text"`      // JSON-encoded version of SharedWith (stored in DB)
+	WriteAccess   []string  `gorm:"-"`
+	ReadAccess    []string  `gorm:"-"`
+	SharedWithRaw string    `gorm:"type:text"` // JSON-encoded version of SharedWith (stored in DB)
 }

@@ -32,6 +32,14 @@ func main() {
 		log.Fatalf("Failed to run database migrations: %v", err)
 	}
 
+	if err := database.DB.AutoMigrate(&models.FilePermission{}); err != nil {
+		log.Fatalf("Failed to run database migrations: %v", err)
+	}
+
+	if err := database.DB.AutoMigrate(&models.FileShare{}); err != nil {
+		log.Fatalf("Failed to run database migrations: %v", err)
+	}
+
 	// Step 4: Start the API server
 	utils.Logger.Info("Starting API server...", zap.String("port", cfg.ServerPort))
 	api.StartServer(cfg, utils.Logger)

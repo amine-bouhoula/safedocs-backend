@@ -27,6 +27,7 @@ func (m *MetadataService) SaveFileMetadata(userID string, fileID string, fileNam
 		FileName:     fileName,
 		Size:         size,
 		ContentType:  "application/octet-stream",
+		CreatedBy:    userID,
 	}
 
 	m.logger.Info("File metadata logged",
@@ -86,4 +87,10 @@ func (m *MetadataService) DeleteFileMetadata(userID string, fileID string, fileV
 		return err
 	}
 	return nil
+}
+
+func (ms *MetadataService) GetFileByID(fileID string) (models.FileMetadata, error) {
+	var file models.FileMetadata
+	err := ms.db.Where("file_id = ?", fileID).First(&file).Error
+	return file, err
 }

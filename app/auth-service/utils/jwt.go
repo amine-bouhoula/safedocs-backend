@@ -44,7 +44,7 @@ func GenerateInternalJWT(user models.User, roles []string, privateKeyPEM []byte)
 		"name":   user.Username,
 		"email":  user.Email,
 		"roles":  roles,
-		"exp":    time.Now().Add(time.Minute * 1).Unix(),
+		"exp":    time.Now().Add(time.Hour * 24).Unix(),
 		"iss":    "auth-service",
 		"aud":    "file-service",
 	}
