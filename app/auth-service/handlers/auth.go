@@ -264,3 +264,40 @@ func GetUserHandler() gin.HandlerFunc {
 		})
 	}
 }
+
+func GetUserByEmailHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userEmail := c.Param("user_email")
+
+		// Log the incoming request
+		utils.Logger.Info("Received request to get user",
+			zap.String("user_email", userEmail),
+			zap.String("method", c.Request.Method),
+			zap.String("path", c.Request.URL.Path),
+		)
+
+		// Query the user from the database
+		var user models.User
+		err := database.DB.Where("Email = ?", userEmail).First(&user).Error
+		if err != nil {
+			utils.Logger.Error("Failed to retrieve user",
+				zap.String("user_email", userEmail),
+				zap.Error(err),
+			)
+			c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+			return
+		}
+
+		// Successful response log
+		utils.Logger.Info("User retrieved successfully",
+			zap.String("user_email", string(user.ID)),
+		)
+
+		// Respond with the found user
+		c.JSON(http.StatusOK, gin.H{
+			"user_id":  user.ID,
+			"email":    user.Email,
+			"username": user.Username,
+		})
+	}
+}

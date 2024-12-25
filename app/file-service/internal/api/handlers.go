@@ -479,8 +479,8 @@ func singleFileDeleteHandler(c *gin.Context, metadata *fileservices.MetadataServ
 func shareFileHandler(c *gin.Context, metadata *fileservices.MetadataService, permissions *fileservices.PermissionsService, log *zap.Logger) {
 
 	type ShareFile struct {
-		FileID       string `json:"file_id"`
-		SharedWithID string `json:"shared_with_id"`
+		FileID          string `json:"file_id"`
+		SharedWithEmail string `json:"shared_with_email"`
 	}
 
 	var req ShareFile
@@ -492,7 +492,7 @@ func shareFileHandler(c *gin.Context, metadata *fileservices.MetadataService, pe
 	}
 
 	fileID := req.FileID
-	sharedWithID := req.SharedWithID
+	sharedWithEmail := req.SharedWithEmail
 
 	userID, exists := c.Get("userID")
 	if !exists {
@@ -522,7 +522,7 @@ func shareFileHandler(c *gin.Context, metadata *fileservices.MetadataService, pe
 	}
 
 	if files[0].CreatedBy == userID {
-		err := permissions.AddNewPermission(fileID, userIDStr, sharedWithID, models.PermissionRead)
+		err := permissions.AddNewPermission(fileID, userIDStr, sharedWithEmail, models.PermissionRead)
 		if err == nil {
 			c.JSON(http.StatusAccepted, gin.H{"msg": "File shared successfully"})
 		} else {
@@ -540,7 +540,7 @@ func shareFileHandler(c *gin.Context, metadata *fileservices.MetadataService, pe
 
 	// if all okay, lets add a new line to permissions table
 	if files[0].CreatedBy == userIDStr || isAllowed || files[0].CreatedBy == userID {
-		err := permissions.AddNewPermission(fileID, userIDStr, sharedWithID, models.PermissionRead)
+		err := permissions.AddNewPermission(fileID, userIDStr, sharedWithEmail, models.PermissionRead)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal error" + err.Error()})
 		}
