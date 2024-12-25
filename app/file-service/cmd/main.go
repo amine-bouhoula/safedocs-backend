@@ -32,6 +32,10 @@ func main() {
 		log.Fatalf("Failed to run database migrations: %v", err)
 	}
 
+	if err := database.DB.AutoMigrate(&models.FilesBin{}); err != nil {
+		log.Fatalf("Failed to run database migrations: %v", err)
+	}
+
 	if err := database.DB.AutoMigrate(&models.FilePermission{}); err != nil {
 		log.Fatalf("Failed to run database migrations: %v", err)
 	}

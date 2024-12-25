@@ -16,6 +16,7 @@ import (
 	"github.com/amine-bouhoula/safedocs-mvp/sdlib/config"
 	"github.com/amine-bouhoula/safedocs-mvp/sdlib/database"
 	"github.com/amine-bouhoula/safedocs-mvp/sdlib/services"
+	"github.com/amine-bouhoula/safedocs-mvp/sdlib/utils"
 	"github.com/gin-contrib/cors"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -125,9 +126,19 @@ func StartServer(cfg *config.Config, log *zap.Logger) {
 		fileslisterHandler(c, metadataService, log)
 	})
 
+	router.GET("/api/v1/files/listshared", func(c *gin.Context) {
+		log.Info("Handling /list request", zap.String("method", c.Request.Method), zap.String("path", c.Request.URL.Path))
+		sharedfileslisterHandler(c, metadataService, permissionsService, log)
+	})
+
 	router.DELETE("/api/v1/files/:fileID", func(c *gin.Context) {
 		log.Info("Handling /delete request", zap.String("method", c.Request.Method), zap.String("path", c.Request.URL.Path))
 		singleFileDeleteHandler(c, metadataService, log)
+	})
+
+	router.PUT("/api/v1/files/restore/:fileID", func(c *gin.Context) {
+		log.Info("Handling /restore request", zap.String("method", c.Request.Method), zap.String("path", c.Request.URL.Path))
+		restoreFileHandler(c, metadataService, log)
 	})
 
 	var ws = fileservices.NewWebSocketServer(log)
@@ -141,9 +152,9 @@ func StartServer(cfg *config.Config, log *zap.Logger) {
 		downloadFileHandler(c, metadataService, permissionsService, storageService)
 	})
 
-	router.PUT("/api/v1/files/share/:fileID/:sharedWithID", func(c *gin.Context) {
+	router.POST("/api/v1/files/share", func(c *gin.Context) {
 		log.Info("Handler /share request", zap.String("method", c.Request.Method), zap.String("path", c.Request.URL.Path))
-		ShareFileHandler(c, metadataService, permissionsService, log)
+		shareFileHandler(c, metadataService, permissionsService, log)
 
 	})
 
@@ -176,7 +187,7 @@ func downloadFileHandler(c *gin.Context, metadata *fileservices.MetadataService,
 		return
 	}
 
-	file, err := metadata.GetFileByID(fileID)
+	file, err := metadata.GetFilesByID([]string{fileID})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to download file: " + err.Error()})
 		return
@@ -196,11 +207,11 @@ func downloadFileHandler(c *gin.Context, metadata *fileservices.MetadataService,
 	c.Header("Content-Transfer-Encoding", "binary") // Ensures the content is treated as binary
 
 	c.JSON(http.StatusFound, gin.H{
-		"Name":       file.FileName,
-		"Size":       file.Size,
-		"CreatedBy":  file.CreatedBy,
-		"CreatedAt":  file.CreatedAt,
-		"Version":    file.VersionID,
+		"Name":       file[0].FileName,
+		"Size":       file[0].Size,
+		"CreatedBy":  file[0].CreatedBy,
+		"CreatedAt":  file[0].CreatedAt,
+		"Version":    file[0].VersionID,
 		"Permission": "Read",
 	})
 }
@@ -374,6 +385,56 @@ func fileslisterHandler(c *gin.Context, metadata *fileservices.MetadataService, 
 	c.JSON(http.StatusOK, gin.H{"files": files})
 }
 
+func sharedfileslisterHandler(c *gin.Context, metadata *fileservices.MetadataService, permissions *fileservices.PermissionsService, log *zap.Logger) {
+	authHeader := c.GetHeader("Authorization")
+	if authHeader == "" {
+		log.Error("Authorization header is missing")
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization header is required"})
+		return
+	}
+
+	// The token is usually in the format "Bearer <token>"
+	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+	if tokenString == authHeader { // "Bearer " was not in the header
+		log.Error("Authorization header format is invalid")
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization header format is invalid"})
+		return
+	}
+
+	// Extract the userID from the token claims
+	userID, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "UserID not found in context"})
+		return
+	}
+
+	userIDStr, ok := userID.(string)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "UserID is not of type string"})
+		return
+	}
+
+	// Step 3: Fetch files for the user from the database
+	filesIDs, err := permissions.GetSharedFilesByUserID(userIDStr, models.PermissionRead)
+	if err != nil {
+		log.Error("Failed to fetch files", zap.String("userID", userIDStr), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve files"})
+		return
+	}
+
+	files, err := metadata.GetFilesByID(filesIDs)
+	if err != nil {
+		log.Error("Failed to fetch files", zap.String("userID", userIDStr), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve files"})
+		return
+	}
+
+	// Step 4: Return the list of files in the response
+	log.Info("Files retrieved successfully", zap.String("userID", userIDStr), zap.Int("fileCount", len(files)))
+	c.JSON(http.StatusOK, gin.H{"files": files})
+
+}
+
 func singleFileDeleteHandler(c *gin.Context, metadata *fileservices.MetadataService, log *zap.Logger) {
 	authHeader := c.GetHeader("Authorization")
 	if authHeader == "" {
@@ -415,10 +476,23 @@ func singleFileDeleteHandler(c *gin.Context, metadata *fileservices.MetadataServ
 
 }
 
-func ShareFileHandler(c *gin.Context, metadata *fileservices.MetadataService, permissions *fileservices.PermissionsService, log *zap.Logger) {
+func shareFileHandler(c *gin.Context, metadata *fileservices.MetadataService, permissions *fileservices.PermissionsService, log *zap.Logger) {
 
-	fileID := c.Param("fileID")
-	sharedWithID := c.Param("sharedWithID")
+	type ShareFile struct {
+		FileID       string `json:"file_id"`
+		SharedWithID string `json:"shared_with_id"`
+	}
+
+	var req ShareFile
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.Logger.Error("Invalid request payload", zap.Error(err))
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request payload"})
+		return
+
+	}
+
+	fileID := req.FileID
+	sharedWithID := req.SharedWithID
 
 	userID, exists := c.Get("userID")
 	if !exists {
@@ -433,7 +507,7 @@ func ShareFileHandler(c *gin.Context, metadata *fileservices.MetadataService, pe
 	}
 
 	// Lets first check if the userid is the creator of the file through the metadata
-	file, err := metadata.GetFileByID(fileID)
+	files, err := metadata.GetFilesByID([]string{fileID})
 	if err != nil {
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			log.Error("Authorization header is missing")
@@ -442,7 +516,12 @@ func ShareFileHandler(c *gin.Context, metadata *fileservices.MetadataService, pe
 		}
 	}
 
-	if file.CreatedBy == userID {
+	if len(files) == 0 {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Permission denied for selected file"})
+		return
+	}
+
+	if files[0].CreatedBy == userID {
 		err := permissions.AddNewPermission(fileID, userIDStr, sharedWithID, models.PermissionRead)
 		if err == nil {
 			c.JSON(http.StatusAccepted, gin.H{"msg": "File shared successfully"})
@@ -460,7 +539,7 @@ func ShareFileHandler(c *gin.Context, metadata *fileservices.MetadataService, pe
 	}
 
 	// if all okay, lets add a new line to permissions table
-	if file.CreatedBy == userIDStr || isAllowed || file.CreatedBy == userID {
+	if files[0].CreatedBy == userIDStr || isAllowed || files[0].CreatedBy == userID {
 		err := permissions.AddNewPermission(fileID, userIDStr, sharedWithID, models.PermissionRead)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal error" + err.Error()})
@@ -469,4 +548,44 @@ func ShareFileHandler(c *gin.Context, metadata *fileservices.MetadataService, pe
 		c.JSON(http.StatusForbidden, gin.H{"error": "You dont have the permission to share this folder"})
 	}
 
+}
+
+func restoreFileHandler(c *gin.Context, metadata *fileservices.MetadataService, log *zap.Logger) {
+	authHeader := c.GetHeader("Authorization")
+	if authHeader == "" {
+		log.Error("Authorization header is missing")
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization header is required"})
+		return
+	}
+
+	// The token is usually in the format "Bearer <token>"
+	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+	if tokenString == authHeader { // "Bearer " was not in the header
+		log.Error("Authorization header format is invalid")
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization header format is invalid"})
+		return
+	}
+
+	// Extract the userID from the token claims
+	userID, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "UserID not found in context"})
+		return
+	}
+
+	userIDStr, ok := userID.(string)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "UserID is not of type string"})
+		return
+	}
+
+	fileID := c.Param("fileID") // Get fileID from URL parameter
+
+	// Step 3: Fetch files for the user from the database
+	err := metadata.RestoreFile(fileID, userIDStr)
+	if err != nil {
+		log.Error("Failed to fetch files", zap.String("userID", userIDStr), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve files"})
+		return
+	}
 }

@@ -2,6 +2,7 @@ package services
 
 import (
 	"file-service/internal/models"
+	"time"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -81,6 +82,19 @@ func (m *MetadataService) DeleteFileMetadata(userID string, fileID string, fileV
 		zap.String("ContentType", metadata.ContentType),
 	)
 
+	m.logger.Info("Moving file metadata to bin")
+
+	binEntry := models.FilesBin{
+		FileMetadata: metadata,
+		DeletedBy:    userID,
+		DeletedAt:    time.Now(),
+	}
+
+	if err := m.db.Create(&binEntry).Error; err != nil {
+		m.logger.Error("Failed to save metadata to bin", zap.Error(err))
+		return err
+	}
+
 	// Delete the file metadata
 	if err := m.db.Delete(&metadata).Error; err != nil {
 		m.logger.Error("Failed to delete metadata", zap.Error(err))
@@ -89,8 +103,37 @@ func (m *MetadataService) DeleteFileMetadata(userID string, fileID string, fileV
 	return nil
 }
 
-func (ms *MetadataService) GetFileByID(fileID string) (models.FileMetadata, error) {
-	var file models.FileMetadata
-	err := ms.db.Where("file_id = ?", fileID).First(&file).Error
-	return file, err
+func (ms *MetadataService) GetFilesByID(filseID []string) ([]models.FileMetadata, error) {
+	var files []models.FileMetadata
+	err := ms.db.Where("file_id IN ?", filseID).Find(&files).Error
+	return files, err
+}
+
+func (ms *MetadataService) GetBinContents(userID string) ([]models.FilesBin, error) {
+	var binContents []models.FilesBin
+	err := ms.db.Where("user_id = ?", userID).Find(&binContents).Error
+	return binContents, err
+}
+
+func (ms *MetadataService) RestoreFile(fileID string, userID string) error {
+	var binEntry models.FilesBin
+	if err := ms.db.Where("file_id = ? AND user_id = ?", fileID, userID).First(&binEntry).Error; err != nil {
+		return err
+	}
+
+	// Restore the file to Metadata table
+	restoredFile := binEntry.FileMetadata
+	if err := ms.db.Create(&restoredFile).Error; err != nil {
+		ms.logger.Error("failed to restore file metadata", zap.Error(err))
+		return err
+	}
+
+	// Delete the deleted file record from FilesBin
+	if err := ms.db.Delete(&binEntry).Error; err != nil {
+		ms.logger.Error("Failed to delete metadata from filesbin", zap.Error(err))
+		return err
+	}
+
+	ms.logger.Info("file restored correctly")
+	return nil
 }

@@ -71,3 +71,17 @@ func (ps *PermissionsService) AddNewPermission(fileID string, sharedByID string,
 	}
 	return nil
 }
+
+func (ps *PermissionsService) GetSharedFilesByUserID(sharedWithID string, permissionType models.PermissionType) ([]string, error) {
+	var files []models.FileShare
+	err := ps.db.Where("shared_with = ? AND permission_type = ?", sharedWithID, permissionType).Find(&files).Error
+	if err != nil {
+		return nil, err
+	}
+
+	var filesID []string
+	for _, file := range files {
+		filesID = append(filesID, file.FileID)
+	}
+	return filesID, nil
+}
