@@ -8,7 +8,8 @@ import (
 
 type User struct {
 	ID        string `gorm:"type:uuid;default:uuid_generate_v4();primaryKey"`
-	Username  string `gorm:"unique;not null"`
+	Firstname string `gorm:"not null"`
+	Lastname  string `gorm:"not null"`
 	Email     string `gorm:"unique;not null"`
 	Password  string `gorm:"not null"`
 	Company   string
@@ -34,9 +35,10 @@ type RefreshToken struct {
 }
 
 type RegisterRequest struct {
-	Email    string `json:"email" binding:"required,email"`
-	Username string `json:"username" binding:"required"`
-	Password string `json:"password" binding:"required,min=8"`
+	Email     string `json:"email" binding:"required,email"`
+	Firstname string `json:"firstname" binding:"required"`
+	Lastname  string `json:"lastname" binding:"required"`
+	Password  string `json:"password" binding:"required,min=8"`
 }
 
 type LoginRequest struct {

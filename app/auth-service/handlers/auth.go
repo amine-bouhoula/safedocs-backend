@@ -60,9 +60,10 @@ func RegisterHandler() gin.HandlerFunc {
 
 		// Create user model
 		user := models.User{
-			Username: req.Username,
-			Email:    req.Email,
-			Password: hashedPassword,
+			Firstname: req.Firstname,
+			Lastname:  req.Lastname,
+			Email:     req.Email,
+			Password:  hashedPassword,
 		}
 
 		// Save user to database
@@ -72,7 +73,7 @@ func RegisterHandler() gin.HandlerFunc {
 			return
 		}
 
-		utils.Logger.Info("User registered successfully", zap.String("username", user.Username))
+		utils.Logger.Info("User registered successfully", zap.String("user", user.Firstname+" "+user.Lastname))
 
 		// Load the private key for JWT generation
 		privateKeyPEM, err := authservices.LoadPrivateKey("../keys/private_key.pem")
@@ -258,9 +259,9 @@ func GetUserHandler() gin.HandlerFunc {
 
 		// Respond with the found user
 		c.JSON(http.StatusOK, gin.H{
-			"user_id":  user.ID,
-			"email":    user.Email,
-			"username": user.Username,
+			"user_id": user.ID,
+			"email":   user.Email,
+			"user":    user.Firstname + " " + user.Lastname,
 		})
 	}
 }
@@ -295,9 +296,8 @@ func GetUserByEmailHandler() gin.HandlerFunc {
 
 		// Respond with the found user
 		c.JSON(http.StatusOK, gin.H{
-			"user_id":  user.ID,
-			"email":    user.Email,
-			"username": user.Username,
-		})
+			"user_id": user.ID,
+			"email":   user.Email,
+			"user":    user.Firstname + " " + user.Lastname})
 	}
 }

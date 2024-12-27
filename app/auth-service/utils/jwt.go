@@ -41,7 +41,7 @@ func GenerateInternalJWT(user models.User, roles []string, privateKeyPEM []byte)
 	// Log token claims
 	claims := jwt.MapClaims{
 		"userID": user.ID,
-		"name":   user.Username,
+		"name":   user.Firstname + "" + user.Lastname,
 		"email":  user.Email,
 		"roles":  roles,
 		"exp":    time.Now().Add(time.Hour * 24).Unix(),
