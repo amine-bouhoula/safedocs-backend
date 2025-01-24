@@ -73,47 +73,37 @@ func ConnectMinio(endpoint, accessKey, secretKey string, log *zap.Logger) (*Stor
 		return nil, err
 	}
 
-	return &StorageService{client: client, logger: log, bucket: "files"}, nil
+	return &StorageService{client: client, logger: log, bucket: "userprofilepictures"}, nil
 }
 
-func (s *StorageService) UploadFile(file io.Reader, fileID, fileName, contentType string) (string, string, error) {
+func (s *StorageService) UploadFile(file io.Reader, contentType string) (string, string, error) {
 
-	parentFileID := ""
-	if fileID != "" {
-		parentFileID = uuid.New().String()
-	}
+	imageID := uuid.New().String() + ".jpg"
 
 	// Upload the file using the provided or generated fileID
-	info, err := s.client.PutObject(context.Background(), s.bucket, fileID, file, -1, minio.PutObjectOptions{
+	_, err := s.client.PutObject(context.Background(), s.bucket, imageID, file, -1, minio.PutObjectOptions{
 		ContentType: contentType,
 	})
 	if err != nil {
-		s.logger.Error("Failed to upload file", zap.String("fileID", fileID), zap.Error(err))
+		s.logger.Error("Failed to upload profile picture", zap.String("fileID", imageID), zap.Error(err))
 		return "", "", err
 	}
 
+	publicURL := fmt.Sprintf("http://192.168.1.19:9000/%s/%s", s.bucket, imageID)
 	// Log success with the version ID
 	s.logger.Info("File uploaded successfully",
-		zap.String("fileID", fileID),
-		zap.String("parentFileID", parentFileID),
-		zap.String("versionID", info.VersionID),
-		zap.String("contentType", contentType),
+		zap.String("imageID", imageID),
+		zap.String("Image shareable link", publicURL),
 	)
 
-	return fileID, info.VersionID, nil
+	return imageID, publicURL, nil
 }
 
-func (s *StorageService) GetFileObject(bucketName, objectName, versionID string) (*minio.Object, string, error) {
+func (s *StorageService) GetFileObject(bucketName, objectName string) (*minio.Object, string, error) {
 	ctx := context.Background()
 
-	opts := minio.GetObjectOptions{}
-
-	if versionID != "" {
-		opts.VersionID = versionID
-	}
-
 	// Retrieve the object
-	object, err := s.client.GetObject(ctx, bucketName, objectName, opts)
+	object, err := s.client.GetObject(ctx, bucketName, objectName, minio.GetObjectOptions{})
 	if err != nil {
 		return nil, "", err
 	}
@@ -126,6 +116,13 @@ func (s *StorageService) GetFileObject(bucketName, objectName, versionID string)
 
 	// Return the object and its content type
 	return object, statInfo.ContentType, nil
+}
+
+func (s *StorageService) GetFileVersion(bucketName, objectName, versionID string) (*minio.Object, error) {
+	opts := minio.GetObjectOptions{}
+	opts.VersionID = versionID
+
+	return s.client.GetObject(context.Background(), bucketName, objectName, opts)
 }
 
 func (s *StorageService) ListFileVersions(bucketName, objectName string) ([]minio.ObjectInfo, error) {

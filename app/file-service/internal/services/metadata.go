@@ -4,7 +4,6 @@ import (
 	"file-service/internal/models"
 	"time"
 
-	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -19,22 +18,21 @@ func NewMetadataService(db *gorm.DB, log *zap.Logger) *MetadataService {
 }
 
 // SaveFileMetadata saves the file metadata using GORM
-func (m *MetadataService) SaveFileMetadata(userID string, fileID string, fileName string, fileVersion string, size int64) error {
+func (m *MetadataService) SaveFileMetadata(userID string, fileID string, fileName string, fileVersion string, comment string, size int64) error {
 	metadata := models.FileMetadata{
-		UserID:       userID,
-		FileID:       fileID,
-		ParentFileID: uuid.NewString(),
-		VersionID:    fileVersion,
-		FileName:     fileName,
-		Size:         size,
-		ContentType:  "application/octet-stream",
-		CreatedBy:    userID,
+		UserID:      userID,
+		FileID:      fileID,
+		VersionID:   fileVersion,
+		FileName:    fileName,
+		Comment:     comment,
+		Size:        size,
+		ContentType: "application/octet-stream",
+		CreatedBy:   userID,
 	}
 
 	m.logger.Info("File metadata logged",
 		zap.String("FileID", metadata.FileID),
 		zap.String("UserID", metadata.UserID),
-		zap.String("ParentFileID", metadata.ParentFileID),
 		zap.String("VersionID", metadata.VersionID),
 		zap.String("FileName", metadata.FileName),
 		zap.Int64("Size", metadata.Size),
@@ -75,7 +73,6 @@ func (m *MetadataService) DeleteFileMetadata(userID string, fileID string, fileV
 	m.logger.Info("Deleting file metadata",
 		zap.String("FileID", metadata.FileID),
 		zap.String("UserID", metadata.UserID),
-		zap.String("ParentFileID", metadata.ParentFileID),
 		zap.String("VersionID", metadata.VersionID),
 		zap.String("FileName", metadata.FileName),
 		zap.Int64("Size", metadata.Size),
@@ -107,6 +104,12 @@ func (ms *MetadataService) GetFilesByID(filseID []string) ([]models.FileMetadata
 	var files []models.FileMetadata
 	err := ms.db.Where("file_id IN ?", filseID).Find(&files).Error
 	return files, err
+}
+
+func (ms *MetadataService) GetFileByVersionID(versionID string) (models.FileMetadata, error) {
+	var file models.FileMetadata
+	err := ms.db.Where("version_id = ?", versionID).Find(&file).Error
+	return file, err
 }
 
 func (ms *MetadataService) GetBinContents(userID string) ([]models.FilesBin, error) {

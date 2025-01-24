@@ -1,47 +1,31 @@
 package main
 
 import (
-	"log"
-	"time"
-
-	"user-service/handlers"
+	"fmt"
+	"user-service/api"
 
 	"github.com/amine-bouhoula/safedocs-mvp/sdlib/config"
 	"github.com/amine-bouhoula/safedocs-mvp/sdlib/database"
 	"github.com/amine-bouhoula/safedocs-mvp/sdlib/utils"
-	"github.com/gin-contrib/cors"
-
-	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
 func main() {
-	// Initialize Logger and Database
-	utils.InitLogger("production")
-	defer utils.Logger.Sync()
-
+	// Step 1: Load configuration
 	cfg, _ := config.LoadConfig()
 
-	database.ConnectDB(cfg.DatabaseURL)
+	fmt.Println(cfg.LogLevel)
 
-	router := gin.Default()
+	// Step 2: Initialize zap logger
+	utils.InitLogger(cfg.LogLevel)
 
-	router.Use(cors.New(cors.Config{
-		AllowAllOrigins: true,
-		//AllowOrigins:     []string{"http://localhost:5173"},
-		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowHeaders:     []string{"Content-Type", "Authorization"},
-		AllowCredentials: true,
-		ExposeHeaders:    []string{"Content-Length", "Authorization"},
-		MaxAge:           12 * time.Hour, // Caching preflight requests
-	}))
-
-	// Register Routes
-	router.POST("/api/v1/users", handlers.CreateUserHandler())
-	router.GET("/api/v1/user/info", handlers.GetUserHandler())
-	router.POST("/api/v1/users/check", handlers.GetUserHandlerByEmail())
-
-	// Start the Server
-	if err := router.Run(":8003"); err != nil {
-		log.Fatal("Server failed to start:", err)
+	// Step 3: Initialize database connection
+	err := database.ConnectDB(cfg.DatabaseURL)
+	if err != nil {
+		utils.Logger.Fatal("Failed to connect to the Postgres database", zap.Error(err))
 	}
+
+	// Step 4: Start the API server
+	utils.Logger.Info("Starting API server...", zap.String("port", cfg.ServerPort))
+	api.StartServer(cfg, utils.Logger)
 }

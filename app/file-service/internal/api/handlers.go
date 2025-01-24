@@ -6,9 +6,11 @@ import (
 	"file-service/internal/models"
 	fileservices "file-service/internal/services"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -127,6 +129,11 @@ func StartServer(cfg *config.Config, log *zap.Logger) {
 		fileslisterHandler(c, metadataService, log)
 	})
 
+	router.GET("/api/v1/files/versions/list/:fileID", func(c *gin.Context) {
+		log.Info("Handling /versions/list request", zap.String("method", c.Request.Method), zap.String("path", c.Request.URL.Path))
+		listFileVersionsHandler(c, metadataService, storageService, log)
+	})
+
 	router.GET("/api/v1/files/listshared", func(c *gin.Context) {
 		log.Info("Handling /list request", zap.String("method", c.Request.Method), zap.String("path", c.Request.URL.Path))
 		sharedfileslisterHandler(c, metadataService, permissionsService, log)
@@ -148,7 +155,7 @@ func StartServer(cfg *config.Config, log *zap.Logger) {
 		ws.HandleConnection(c, publicKey)
 	})
 
-	router.GET("/api/v1/files/download/:fileID", func(c *gin.Context) {
+	router.GET("/api/v1/files/download/:fileID/:fileVersion", func(c *gin.Context) {
 		log.Info("Handling /download request", zap.String("method", c.Request.Method), zap.String("path", c.Request.URL.Path))
 		downloadFileHandler(c, metadataService, permissionsService, storageService)
 	})
@@ -170,6 +177,72 @@ func StartServer(cfg *config.Config, log *zap.Logger) {
 func downloadFileHandler(c *gin.Context, metadata *fileservices.MetadataService, permissions *fileservices.PermissionsService, storageService *fileservices.StorageService) {
 	bucketName := "files" // c.Param("bucket")
 	fileID := c.Param("fileID")
+	fileVersion := c.Param("fileVersion")
+
+	userID, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "UserID not found in context"})
+		return
+	}
+
+	_, ok := userID.(string)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "UserID is not of type string"})
+		return
+	}
+	// isAllowed, err := permissions.IsActionAllowed(fileID, userIDStr, models.PermissionRead)
+	// if err != nil || !isAllowed {
+	// 	c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+	// return
+	// }
+
+	file, err := metadata.GetFilesByID([]string{fileID})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to download file: " + err.Error()})
+		return
+	}
+
+	// Get the file and its content type
+	object, contentType, err := storageService.GetFileObject(bucketName, fileID, fileVersion)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to download file: " + err.Error()})
+		return
+	}
+	defer object.Close()
+
+	// Set appropriate headers for binary file download
+	c.Header("Content-Disposition", "attachment; filename="+filepath.Base(fileID))
+	c.Header("Content-Type", contentType)
+	c.Header("Content-Transfer-Encoding", "binary") // Ensures the content is treated as binary
+
+	// Stream the file content to the response
+	if _, err := io.Copy(c.Writer, object); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to send file content: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusFound, gin.H{
+		"Name":       file[0].FileName,
+		"Size":       file[0].Size,
+		"CreatedBy":  file[0].CreatedBy,
+		"CreatedAt":  file[0].CreatedAt,
+		"Version":    file[0].VersionID,
+		"Permission": "Read",
+	})
+}
+
+type FileVersion struct {
+	Size        int64
+	Name        string
+	ID          string
+	VersionID   string
+	VersionDate string
+	Comment     string
+}
+
+func listFileVersionsHandler(c *gin.Context, metadata *fileservices.MetadataService, storage *fileservices.StorageService, log *zap.Logger) {
+	fileID := c.Param("fileID") // Get fileID from URL parameter
+
+	bucketName := "files"
 
 	userID, exists := c.Get("userID")
 	if !exists {
@@ -182,52 +255,69 @@ func downloadFileHandler(c *gin.Context, metadata *fileservices.MetadataService,
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "UserID is not of type string"})
 		return
 	}
-	isAllowed, err := permissions.IsActionAllowed(fileID, userIDStr, models.PermissionRead)
-	if err != nil || !isAllowed {
-		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
-		return
-	}
 
-	file, err := metadata.GetFilesByID([]string{fileID})
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to download file: " + err.Error()})
-		return
-	}
+	// Log the request headers and body
+	log.Info("Received versions listing request",
+		zap.String("user id", userIDStr),
+		zap.String("file id", fileID),
+		zap.String("method", c.Request.Method),
+		zap.String("url", c.Request.RequestURI),
+		zap.String("clientIP", c.ClientIP()),
+		zap.String("headers", fmt.Sprintf("%v", c.Request.Header)),
+	)
 
-	// Get the file and its content type
-	object, contentType, err := storageService.GetFileObject(bucketName, fileID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to download file: " + err.Error()})
-		return
-	}
-	defer object.Close()
-
-	// Set appropriate headers for binary file download
-	c.Header("Content-Disposition", "attachment; filename="+filepath.Base(fileID))
-	c.Header("Content-Type", contentType)
-	c.Header("Content-Transfer-Encoding", "binary") // Ensures the content is treated as binary
-
-	c.JSON(http.StatusFound, gin.H{
-		"Name":       file[0].FileName,
-		"Size":       file[0].Size,
-		"CreatedBy":  file[0].CreatedBy,
-		"CreatedAt":  file[0].CreatedAt,
-		"Version":    file[0].VersionID,
-		"Permission": "Read",
-	})
-}
-
-func listFileVersionsHandler(c *gin.Context, storage *fileservices.StorageService) {
-	bucketName := c.Param("bucket")
-	fileName := c.Param("file")
-
-	versions, err := storage.ListFileVersions(bucketName, fileName)
+	versions, err := storage.ListFileVersions(bucketName, fileID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list file versions: " + err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, versions)
+	var fileversions []FileVersion
+
+	for _, obj := range versions {
+
+		fileMetadata, err := metadata.GetFileByVersionID(obj.VersionID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable upload file"})
+			return
+		}
+
+		if fileMetadata.CreatedBy != userIDStr {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "File not owned by current user"})
+			return
+		}
+
+		fileversion := FileVersion{
+			Size: obj.Size,
+			// Name:        obj.Name,
+			ID:        obj.Key,
+			VersionID: obj.VersionID,
+			Comment:   fileMetadata.Comment,
+		}
+
+		versionDate, err := fileservices.ParseAndFormatVersionDate(obj.LastModified.GoString())
+		if err == nil {
+			fileversion.VersionDate = versionDate
+		}
+
+		fileversions = append(fileversions, fileversion)
+	}
+
+	sort.Slice(fileversions, func(i, j int) bool {
+		// Parse the VersionDate strings into time.Time
+		timeI, errI := time.Parse(time.RFC3339, fileversions[i].VersionDate)
+		timeJ, errJ := time.Parse(time.RFC3339, fileversions[j].VersionDate)
+
+		// If parsing fails, treat the unparseable dates as equal
+		if errI != nil || errJ != nil {
+			return false
+		}
+
+		// Compare the parsed time.Time values
+		return timeI.Before(timeJ)
+	})
+
+	c.JSON(http.StatusOK, gin.H{"messge": "OK", "fileversions": fileversions})
 }
 
 func singleFileUploadHandler(c *gin.Context, storage *fileservices.StorageService, metadata *fileservices.MetadataService, log *zap.Logger) {
@@ -263,7 +353,8 @@ func singleFileUploadHandler(c *gin.Context, storage *fileservices.StorageServic
 		zap.String("clientIP", c.ClientIP()),
 		zap.String("headers", fmt.Sprintf("%v", c.Request.Header)),
 	)
-	const maxFileSize = 100 * 1024 * 1024 // 10MB in bytes
+
+	// const maxFileSize = 100 * 1024 * 1024 // 10MB in bytes
 	// Parse multipart form data
 	form, err := c.MultipartForm()
 	if err != nil {
@@ -278,6 +369,46 @@ func singleFileUploadHandler(c *gin.Context, storage *fileservices.StorageServic
 		return
 	}
 
+	file := files[0]
+
+	var fileID string
+
+	file_id := c.PostForm("file_id")
+	if file_id != "" {
+		// this an old file, we need to update the version
+		// let's fist make sure we have a file with this id in our db
+		// this an old file, we need to update the version
+		// let's fist make sure we have a file with this id in our db
+		fileIDs := []string{file_id} // Create a slice with one element
+		filesMetadata, err := metadata.GetFilesByID(fileIDs)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable upload file"})
+			return
+		}
+
+		if len(filesMetadata) != 0 {
+			fileMetadata := filesMetadata[0]
+			if fileMetadata.CreatedBy != userIDStr {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "File not owned by current user"})
+				return
+			}
+		}
+
+		fileID = file_id
+	} else {
+		fileID = uuid.New().String()
+	}
+
+	var parentFileID string
+	parent_file_id := c.PostForm("parent_file_id")
+	if parent_file_id == "" {
+		parentFileID = parent_file_id
+	} else {
+		parentFileID = uuid.New().String()
+	}
+
+	comment := c.PostForm("comment")
+
 	type uploadedFile struct {
 		Size int64
 		Name string
@@ -286,55 +417,59 @@ func singleFileUploadHandler(c *gin.Context, storage *fileservices.StorageServic
 
 	var uploadedFiles []uploadedFile
 
-	for _, file := range files {
-		// Check file size
-		if file.Size > maxFileSize {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error": fmt.Sprintf("File %s is too large. Max allowed size is 10MB", file.Filename),
-			})
-			return
-		}
+	log.Info("File to upload:",
+		zap.String("file name", file.Filename),
+		zap.String("file ID", fileID),
+		zap.String("parent file ID", parentFileID),
+	)
 
-		// Open the file
-		fileContent, err := file.Open()
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to open file"})
-			return
-		}
-		defer fileContent.Close()
+	// for _, file := range files {
+	// Check file size
+	// if file.Size > maxFileSize {
+	// 	c.JSON(http.StatusBadRequest, gin.H{
+	// 		"error": fmt.Sprintf("File %s is too large. Max allowed size is 10MB", file.Filename),
+	// 	})
+	// 	return
+	// }
 
-		fileID := uuid.New().String()
-
-		// Upload file to MinIO
-		objectName := fmt.Sprintf("%d_%s", time.Now().UnixNano(), file.Filename)
-		fileID, fileVersion, err := storage.UploadFile(fileContent, fileID, file.Filename, "application/octet-stream")
-		if err != nil {
-			log.Error("Failed to upload merged file to MinIO", zap.Error(err))
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to upload file to storage"})
-			return
-		}
-
-		log.Info("Merged file uploaded successfully", zap.String("fileID", fileID), zap.String("file version", fileVersion))
-
-		// Save metadata
-		err = metadata.SaveFileMetadata(userIDStr, fileID, file.Filename, fileVersion, file.Size)
-		if err != nil {
-			log.Error("Failed to save file metadata", zap.Error(err))
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save file metadata"})
-			return
-		}
-
-		uploadedFiles = append(uploadedFiles, uploadedFile{file.Size, objectName, fileID})
-
-		// Log and respond
-		duration := time.Since(startTime)
-		log.Info("File upload in MINIO and assembly process completed ",
-			zap.String("file name", file.Filename),
-			zap.String("file ID", fileID),
-			zap.String("file version", fileVersion),
-			zap.Duration("duration", duration),
-		)
+	// Open the file
+	fileContent, err := file.Open()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to open file"})
+		return
 	}
+	defer fileContent.Close()
+
+	// Upload file to MinIO
+	objectName := fmt.Sprintf("%d_%s", time.Now().UnixNano(), file.Filename)
+	fileID, fileVersion, err := storage.UploadFile(fileContent, fileID, file.Filename, "application/octet-stream")
+	if err != nil {
+		log.Error("Failed to upload merged file to MinIO", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to upload file to storage"})
+		return
+	}
+
+	log.Info("Merged file uploaded successfully", zap.String("fileID", fileID), zap.String("file version", fileVersion))
+
+	// Save metadata
+	err = metadata.SaveFileMetadata(userIDStr, fileID, file.Filename, fileVersion, comment, file.Size)
+	if err != nil {
+		log.Error("Failed to save file metadata", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save file metadata"})
+		return
+	}
+
+	uploadedFiles = append(uploadedFiles, uploadedFile{file.Size, objectName, fileID})
+
+	// Log and respond
+	duration := time.Since(startTime)
+	log.Info("File upload in MINIO and assembly process completed ",
+		zap.String("file name", file.Filename),
+		zap.String("file ID", fileID),
+		zap.String("file version", fileVersion),
+		zap.Duration("duration", duration),
+	)
+	// }
 
 	// Return success response
 	c.JSON(http.StatusOK, gin.H{

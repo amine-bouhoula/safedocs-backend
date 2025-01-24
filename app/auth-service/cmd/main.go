@@ -46,7 +46,7 @@ func main() {
 
 	router.Use(cors.New(cors.Config{
 		AllowAllOrigins: true,
-		//AllowOrigins:     []string{"http://localhost:5173", "http://localhost:3039"},
+		//AllowOrigins:     []string{"http://localhost:5174", "http://localhost:3039"},
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Content-Type", "Authorization"},
 		ExposeHeaders:    []string{"Content-Length"},
@@ -62,8 +62,8 @@ func main() {
 	router.GET("/api/v1/usersbyemail/:user_email", handlers.GetUserByEmailHandler())
 
 	// Start the server
-	//if err := router.Run(":8000"); err != nil {
-	if err := router.RunTLS(":8000", "./certs/localhost.pem", "./certs/localhost-key.pem"); err != nil {
+	if err := router.Run(":8000"); err != nil {
+		// if err := router.RunTLS(":8000", "./certs/localhost.pem", "./certs/localhost-key.pem"); err != nil {
 		log.Fatal("Server failed to start:", err)
 	}
 }
