@@ -451,6 +451,17 @@ func singleFileUploadHandler(c *gin.Context, storage *fileservices.StorageServic
 
 	log.Info("Merged file uploaded successfully", zap.String("fileID", fileID), zap.String("file version", fileVersion))
 
+	fileContent, err = file.Open()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to open file"})
+		return
+	}
+	defer fileContent.Close()
+
+	localThumbnaiPath, err := fileservices.CreateThumbnailFromPDF(fileID, fileContent)
+	log.Info("Local thumbnail path = " + localThumbnaiPath)
+	log.Info("Thumbnail generate file ", zap.String("fileID", fileID), zap.String("thumbnail path", localThumbnaiPath))
+
 	// Save metadata
 	err = metadata.SaveFileMetadata(userIDStr, fileID, file.Filename, fileVersion, comment, file.Size)
 	if err != nil {
