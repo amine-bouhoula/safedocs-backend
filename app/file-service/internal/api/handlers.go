@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"math"
 	"net/http"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -506,6 +508,8 @@ func fileslisterHandler(c *gin.Context, metadata *fileservices.MetadataService, 
 		return
 	}
 
+	// Missing Token validation!!!!
+
 	// Extract the userID from the token claims
 	userID, exists := c.Get("userID")
 	if !exists {
@@ -519,17 +523,37 @@ func fileslisterHandler(c *gin.Context, metadata *fileservices.MetadataService, 
 		return
 	}
 
+	// Get pagination parameters from query string
+	page, err := strconv.Atoi(c.DefaultQuery("page", "0"))
+	if err != nil || page < 1 {
+		// c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid page number"})
+		// return
+	}
+
+	size, err := strconv.Atoi(c.DefaultQuery("size", "0"))
+	if err != nil || size < 1 {
+		// c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid page size"})
+		// return
+	}
+
+	order_by := c.DefaultQuery("order_by", "created_at")
+	sort := c.DefaultQuery("sort", "DESC")
+
+	offset := (page - 1) * size
+
 	// Step 3: Fetch files for the user from the database
-	files, err := metadata.GetFilesByUserID(userIDStr)
+	files, total_files, err := metadata.GetFilesByUserID(userIDStr, offset, size, order_by, sort)
 	if err != nil {
 		log.Error("Failed to fetch files", zap.String("userID", userIDStr), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve files"})
 		return
 	}
 
+	total_pages := int(math.Ceil(float64(total_files) / float64(size)))
+
 	// Step 4: Return the list of files in the response
 	log.Info("Files retrieved successfully", zap.String("userID", userIDStr), zap.Int("fileCount", len(files)))
-	c.JSON(http.StatusOK, gin.H{"files": files})
+	c.JSON(http.StatusOK, gin.H{"total_pages": total_pages, "files": files})
 }
 
 func sharedfileslisterHandler(c *gin.Context, metadata *fileservices.MetadataService, permissions *fileservices.PermissionsService, log *zap.Logger) {

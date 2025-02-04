@@ -2,6 +2,7 @@ package services
 
 import (
 	"file-service/internal/models"
+	"fmt"
 	"time"
 
 	"go.uber.org/zap"
@@ -46,10 +47,46 @@ func (m *MetadataService) SaveFileMetadata(userID string, fileID string, fileNam
 	return nil
 }
 
-func (ms *MetadataService) GetFilesByUserID(userID string) ([]models.FileMetadata, error) {
+func (ms *MetadataService) GetFilesByUserID(userID string, offset int, size int, order_by string, sort string) ([]models.FileMetadata, int64, error) {
 	var files []models.FileMetadata
-	err := ms.db.Where("user_id = ?", userID).Find(&files).Error
-	return files, err
+	var totalpages int64
+
+	if order_by == "" {
+		order_by = "created_at"
+	}
+
+	if sort == "" {
+		sort = "DESC"
+	}
+
+	// Count total files for the user
+	if err := ms.db.Model(&models.FileMetadata{}).
+		Where("user_id = ?", userID).
+		Count(&totalpages).Error; err != nil {
+		return nil, 0, err
+	}
+
+	if offset != -1 && size != 0 {
+		err := ms.db.Where("user_id = ?", userID).
+			Order(fmt.Sprintf("%s %s", order_by, sort)).
+			Offset(offset).
+			Limit(size).
+			Find(&files).Error
+
+		if err != nil {
+			return nil, 0, err
+		}
+
+	} else {
+		err := ms.db.Where("user_id = ?", userID).
+			Order(fmt.Sprintf("%s %s", order_by, sort)). // Fix here
+			Find(&files).Error
+		if err != nil {
+			return nil, 0, err
+		}
+
+	}
+	return files, totalpages, nil
 }
 
 func (m *MetadataService) DeleteFileMetadata(userID string, fileID string, fileVersion string) error {
