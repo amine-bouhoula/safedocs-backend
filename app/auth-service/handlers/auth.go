@@ -64,6 +64,7 @@ func RegisterHandler() gin.HandlerFunc {
 			Lastname:  req.Lastname,
 			Email:     req.Email,
 			Password:  hashedPassword,
+			Company:   "SafeDocs",
 		}
 
 		// Save user to database

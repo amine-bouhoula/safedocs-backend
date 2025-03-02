@@ -21,3 +21,30 @@ type User struct {
 	ProfilePictureUrl string         `gorm:"type:text"` // URL of the profile picture
 	Position          string         ``
 }
+
+// UserDTO is a slim version used for data transfer.
+type UserDTO struct {
+	ID        string `json:"id"`
+	Firstname string `json:"firstname"`
+	Lastname  string `json:"lastname"`
+	Email     string `json:"email"`
+}
+
+// ToDTO converts a full User model to the UserDTO.
+func (u *User) ToDTO() UserDTO {
+	return UserDTO{
+		ID:        u.ID,
+		Firstname: u.Firstname,
+		Lastname:  u.Lastname,
+		Email:     u.Email,
+	}
+}
+
+// ConvertUsersToDTO converts a slice of User into a slice of UserDTO.
+func ConvertUsersToDTO(users []User) []UserDTO {
+	dtos := make([]UserDTO, len(users))
+	for i, user := range users {
+		dtos[i] = user.ToDTO()
+	}
+	return dtos
+}

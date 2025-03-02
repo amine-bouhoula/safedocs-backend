@@ -95,6 +95,16 @@ func StartServer(cfg *config.Config, log *zap.Logger) {
 		UpdateUserInfo(c, log)
 	})
 
+	router.GET("/api/v1/user/stats", func(c *gin.Context) {
+		log.Info("Handling /stats get request", zap.String("method", c.Request.Method))
+		GetUserStatistics(c, log)
+	})
+
+	router.GET("/api/v1/users", func(c *gin.Context) {
+		log.Info("Handling /users get request", zap.String("method", c.Request.Method))
+		GetAllUsersInCompany(c, log)
+	})
+
 	// Start the server
 	port := cfg.ServerPort
 	log.Info("Starting server", zap.String("port", port))
@@ -366,4 +376,83 @@ func UpdateUserInfo(c *gin.Context, log *zap.Logger) {
 	}
 
 	c.JSON(http.StatusAccepted, gin.H{"message": "User information updated successfully"})
+}
+
+func GetUserStatistics(c *gin.Context, log *zap.Logger) {
+
+	userID, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "UserID not found in context"})
+		return
+	}
+
+	userIDStr, ok := userID.(string)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "UserID is not of type string"})
+		return
+	}
+
+	// Log the request headers and body
+	log.Info("Received request to get user statistics",
+		zap.String("user id", userIDStr),
+		zap.String("method", c.Request.Method),
+		zap.String("url", c.Request.RequestURI),
+		zap.String("clientIP", c.ClientIP()),
+		zap.String("headers", fmt.Sprintf("%v", c.Request.Header)),
+	)
+
+}
+
+func GetAllUsersInCompany(c *gin.Context, log *zap.Logger) {
+
+	userID, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "UserID not found in context"})
+		return
+	}
+
+	userIDStr, ok := userID.(string)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "UserID is not of type string"})
+		return
+	}
+
+	// Log the request headers and body
+	log.Info("Received request to get user statistics",
+		zap.String("user id", userIDStr),
+		zap.String("method", c.Request.Method),
+		zap.String("url", c.Request.RequestURI),
+		zap.String("clientIP", c.ClientIP()),
+		zap.String("headers", fmt.Sprintf("%v", c.Request.Header)),
+	)
+
+	var user models.User
+	if err := database.DB.First(&user, "id = ?", userID).Error; err != nil {
+		utils.Logger.Error("User not found", zap.String("user_id", userIDStr), zap.Error(err))
+		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+		return
+	}
+
+	var users []models.User
+	err := database.DB.Where("company = ?", user.Company).Find(&users).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			utils.Logger.Warn("Users in company not found", zap.String("company", user.Company))
+			c.JSON(http.StatusOK, gin.H{
+				"users": nil,
+			})
+			return
+		}
+
+		// Handle other database errors
+		utils.Logger.Warn("Users in company not found", zap.String("company", user.Company))
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Database error",
+		})
+		return
+	}
+
+	utils.Logger.Info("Users in company found successfully", zap.String("company", user.Company))
+	c.JSON(http.StatusOK, models.ConvertUsersToDTO(users))
+
 }
