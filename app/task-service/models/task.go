@@ -72,8 +72,8 @@ type TaskRepository interface {
 	CreateTask(task *Task) error
 	GetTaskByID(id uuid.UUID) (*Task, error)
 	GetTasksByUserID(userID uuid.UUID, limit, offset int) ([]Task, error)
-	GetTasksByType(taskType TaskType, limit, offset int) ([]Task, error)
-	GetTasksByPriority(priority TaskPriority, limit, offset int) ([]Task, error)
-	GetTasksByStatus(status TaskStatus, limit, offset int) ([]Task, error)
-	GetTasksByCompanyID(companyID uuid.UUID, limit, offset int) ([]Task, error)
+	GetTasksByType(taskType TaskType, userID *uuid.UUID, limit, offset int) ([]Task, error)
+	GetTasksByPriority(priority TaskPriority, userID *uuid.UUID, limit, offset int) ([]Task, error)
+	GetTasksByStatus(status TaskStatus, userID *uuid.UUID, limit, offset int) ([]Task, error)
+	GetTasksByCompanyID(companyID uuid.UUID, userID *uuid.UUID, limit, offset int) ([]Task, error)
 }

@@ -162,18 +162,44 @@ func (h *TaskHandler) GetTasksByUserID(c *gin.Context) {
 func (h *TaskHandler) GetTasksByType(c *gin.Context) {
 	typeParam := models.TaskType(c.Param("type"))
 	limit, offset := getPaginationParams(c)
-	tasks, err := h.repo.GetTasksByType(typeParam, limit, offset)
+
+	userIDParam := c.Query("user_id")
+	var userID uuid.UUID
+	var err error
+
+	if userIDParam != "" {
+		userID, err = uuid.Parse(userIDParam)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+			return
+		}
+	}
+
+	tasks, err := h.repo.GetTasksByType(typeParam, &userID, limit, offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+
 	c.JSON(http.StatusOK, tasks)
 }
 
 func (h *TaskHandler) GetTasksByPriority(c *gin.Context) {
 	priority := models.TaskPriority(c.Param("priority"))
 	limit, offset := getPaginationParams(c)
-	tasks, err := h.repo.GetTasksByPriority(priority, limit, offset)
+	userIDParam := c.Query("user_id")
+	var userID uuid.UUID
+	var err error
+
+	if userIDParam != "" {
+		userID, err = uuid.Parse(userIDParam)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+			return
+		}
+	}
+
+	tasks, err := h.repo.GetTasksByPriority(priority, &userID, limit, offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -184,7 +210,19 @@ func (h *TaskHandler) GetTasksByPriority(c *gin.Context) {
 func (h *TaskHandler) GetTasksByStatus(c *gin.Context) {
 	status := models.TaskStatus(c.Param("status"))
 	limit, offset := getPaginationParams(c)
-	tasks, err := h.repo.GetTasksByStatus(status, limit, offset)
+	userIDParam := c.Query("user_id")
+	var userID uuid.UUID
+	var err error
+
+	if userIDParam != "" {
+		userID, err = uuid.Parse(userIDParam)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+			return
+		}
+	}
+
+	tasks, err := h.repo.GetTasksByStatus(status, &userID, limit, offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -199,7 +237,18 @@ func (h *TaskHandler) GetTasksByCompanyID(c *gin.Context) {
 		return
 	}
 	limit, offset := getPaginationParams(c)
-	tasks, err := h.repo.GetTasksByCompanyID(companyID, limit, offset)
+	userIDParam := c.Query("user_id")
+	var userID uuid.UUID
+
+	if userIDParam != "" {
+		userID, err = uuid.Parse(userIDParam)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+			return
+		}
+	}
+
+	tasks, err := h.repo.GetTasksByCompanyID(companyID, &userID, limit, offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
