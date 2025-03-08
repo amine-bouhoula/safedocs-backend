@@ -89,7 +89,7 @@ func (s *StorageService) UploadFile(file io.Reader, contentType string) (string,
 		return "", "", err
 	}
 
-	publicURL := fmt.Sprintf("http://192.168.1.14:9000/%s/%s", s.bucket, imageID)
+	publicURL := fmt.Sprintf("http://192.168.0.100:9000/%s/%s", s.bucket, imageID)
 	// Log success with the version ID
 	s.logger.Info("File uploaded successfully",
 		zap.String("imageID", imageID),
