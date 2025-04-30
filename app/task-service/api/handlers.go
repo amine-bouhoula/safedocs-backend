@@ -84,12 +84,18 @@ func StartServer(cfg *config.Config, log *zap.Logger) {
 	// Define routes
 	log.Info("Defining routes")
 	router.POST("/api/v1/tasks", taskHandler.CreateTask)
-	router.GET("/api/v1/tasks/:taskid", taskHandler.GetTaskByID)
+	router.GET("/api/v1/tasks", taskHandler.GetAllTasks)
+	router.GET("/api/v1/tasks/", taskHandler.GetAllTasks)
+	router.GET("/api/v1/tasks/:task_id", taskHandler.GetTaskByID)
+	router.PUT("/api/v1/tasks/:task_id", taskHandler.EditTask)
 	router.GET("/api/v1/tasks/user/:user_id", taskHandler.GetTasksByUserID)
+	router.GET("/api/v1/tasks/summary/:user_id", taskHandler.GetTasksSummaryForUser)
 	router.GET("/api/v1/tasks/type/:type", taskHandler.GetTasksByType) // New route added
 	router.GET("/api/v1/tasks/priority/:priority", taskHandler.GetTasksByPriority)
 	router.GET("/api/v1/tasks/status/:status", taskHandler.GetTasksByStatus)
-	router.GET("/api/v1/tasks/company/:company_id", taskHandler.GetTasksByCompanyID)
+	router.GET("/api/v1/tasks/project/:project_id", taskHandler.GetTasksByProjectID)
+	router.POST("/api/v1/tasks/:task_id/comments", taskHandler.CreateComment)
+	router.GET("/api/v1/tasks/:task_id/comments", taskHandler.GetCommentsByTaskID)
 
 	// Start the server
 	port := cfg.ServerPort
@@ -114,14 +120,51 @@ func (h *TaskHandler) CreateTask(c *gin.Context) {
 		return
 	}
 
+	userID, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "UserID not found in context"})
+		return
+	}
+
+	userIDStr, ok := userID.(string)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID type"})
+		return
+	}
+
+	parsedUserID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID format"})
+		return
+	}
+
+	// Create task entity
 	task := &models.Task{
 		ID:          uuid.New(),
 		Title:       taskDTO.Title,
 		Description: taskDTO.Description,
-		CompanyID:   taskDTO.CompanyID,
+		ProjectID:   taskDTO.ProjectID,
 		Type:        taskDTO.Type,
+		Status:      models.StatusPending,
+		AssignedTo:  &parsedUserID,
 	}
 
+	// Process pre-uploaded attachments
+	var attachments []models.Attachment
+	for _, att := range taskDTO.Attachments {
+		attachment := models.Attachment{
+			ID:       uuid.New(),
+			TaskID:   task.ID,
+			FileName: att.FileName,
+			FileURL:  att.FileURL,
+		}
+		attachments = append(attachments, attachment)
+	}
+
+	// Assign attachments to the task
+	task.Attachments = attachments
+
+	// Save task and attachments in the database
 	if err := h.repo.CreateTask(task); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -130,8 +173,18 @@ func (h *TaskHandler) CreateTask(c *gin.Context) {
 	c.JSON(http.StatusCreated, task)
 }
 
+func (h *TaskHandler) GetAllTasks(c *gin.Context) {
+	limit, offset := getPaginationParams(c)
+	tasks, err := h.repo.GetAllTasks(limit, offset)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, tasks)
+}
+
 func (h *TaskHandler) GetTaskByID(c *gin.Context) {
-	id, err := uuid.Parse(c.Param("id"))
+	id, err := uuid.Parse(c.Param("task_id"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid task ID"})
 		return
@@ -145,17 +198,45 @@ func (h *TaskHandler) GetTaskByID(c *gin.Context) {
 }
 
 func (h *TaskHandler) GetTasksByUserID(c *gin.Context) {
-	userID, err := uuid.Parse(c.Param("user_id"))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
-		return
+	var userID uuid.UUID
+	userIDParam := c.Param("user_id")
+
+	if userIDParam == "0" {
+		userIDFromCtx, exists := c.Get("userID")
+		if !exists {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "UserID not found in context"})
+			return
+		}
+
+		userIDStr, ok := userIDFromCtx.(string)
+		if !ok {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID type"})
+			return
+		}
+
+		parsedUserID, err := uuid.Parse(userIDStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID format"})
+			return
+		}
+
+		userID = parsedUserID
+	} else {
+		parsedUserID, err := uuid.Parse(userIDParam)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+			return
+		}
+		userID = parsedUserID
 	}
+
 	limit, offset := getPaginationParams(c)
 	tasks, err := h.repo.GetTasksByUserID(userID, limit, offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+
 	c.JSON(http.StatusOK, tasks)
 }
 
@@ -163,19 +244,7 @@ func (h *TaskHandler) GetTasksByType(c *gin.Context) {
 	typeParam := models.TaskType(c.Param("type"))
 	limit, offset := getPaginationParams(c)
 
-	userIDParam := c.Query("user_id")
-	var userID uuid.UUID
-	var err error
-
-	if userIDParam != "" {
-		userID, err = uuid.Parse(userIDParam)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
-			return
-		}
-	}
-
-	tasks, err := h.repo.GetTasksByType(typeParam, &userID, limit, offset)
+	tasks, err := h.repo.GetTasksByType(typeParam, nil, limit, offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -187,19 +256,8 @@ func (h *TaskHandler) GetTasksByType(c *gin.Context) {
 func (h *TaskHandler) GetTasksByPriority(c *gin.Context) {
 	priority := models.TaskPriority(c.Param("priority"))
 	limit, offset := getPaginationParams(c)
-	userIDParam := c.Query("user_id")
-	var userID uuid.UUID
-	var err error
 
-	if userIDParam != "" {
-		userID, err = uuid.Parse(userIDParam)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
-			return
-		}
-	}
-
-	tasks, err := h.repo.GetTasksByPriority(priority, &userID, limit, offset)
+	tasks, err := h.repo.GetTasksByPriority(priority, nil, limit, offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -210,7 +268,34 @@ func (h *TaskHandler) GetTasksByPriority(c *gin.Context) {
 func (h *TaskHandler) GetTasksByStatus(c *gin.Context) {
 	status := models.TaskStatus(c.Param("status"))
 	limit, offset := getPaginationParams(c)
-	userIDParam := c.Query("user_id")
+
+	tasks, err := h.repo.GetTasksByStatus(status, nil, limit, offset)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, tasks)
+}
+
+func (h *TaskHandler) GetTasksByProjectID(c *gin.Context) {
+	projectID, err := uuid.Parse(c.Param("project_id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid project ID"})
+		return
+	}
+	limit, offset := getPaginationParams(c)
+
+	tasks, err := h.repo.GetTasksByProjectID(projectID, nil, limit, offset)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, tasks)
+}
+
+func (h *TaskHandler) GetTasksSummaryForUser(c *gin.Context) {
+
+	userIDParam := c.Param("userID")
 	var userID uuid.UUID
 	var err error
 
@@ -222,43 +307,40 @@ func (h *TaskHandler) GetTasksByStatus(c *gin.Context) {
 		}
 	}
 
-	tasks, err := h.repo.GetTasksByStatus(status, &userID, limit, offset)
+	tasks, err := h.repo.GetTasksSummaryForUser(&userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, tasks)
+
 }
 
-func (h *TaskHandler) GetTasksByCompanyID(c *gin.Context) {
-	companyID, err := uuid.Parse(c.Param("company_id"))
+func (h *TaskHandler) EditTask(c *gin.Context) {
+	id, err := uuid.Parse(c.Param("task_id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid company ID"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid task ID"})
 		return
 	}
-	limit, offset := getPaginationParams(c)
-	userIDParam := c.Query("user_id")
-	var userID uuid.UUID
 
-	if userIDParam != "" {
-		userID, err = uuid.Parse(userIDParam)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
-			return
-		}
+	var task models.Task
+	if err := c.ShouldBindJSON(&task); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
 	}
 
-	tasks, err := h.repo.GetTasksByCompanyID(companyID, &userID, limit, offset)
-	if err != nil {
+	task.ID = id
+	if err := h.repo.EditTask(&task); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, tasks)
+
+	c.JSON(http.StatusOK, gin.H{"message": "task updated successfully"})
 }
 
 func getPaginationParams(c *gin.Context) (limit, offset int) {
-	limitStr := c.DefaultQuery("limit", "10")
-	offsetStr := c.DefaultQuery("offset", "0")
+	limitStr := c.DefaultQuery("size", "10")
+	offsetStr := c.DefaultQuery("page", "0")
 
 	limit, err := strconv.Atoi(limitStr)
 	if err != nil || limit <= 0 {
@@ -271,4 +353,62 @@ func getPaginationParams(c *gin.Context) (limit, offset int) {
 	}
 
 	return limit, offset
+}
+
+func (h *TaskHandler) CreateComment(c *gin.Context) {
+	var comment models.Comment
+	if err := c.ShouldBindJSON(&comment); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	taskIDParam := c.Param("task_id")
+	taskID, err := uuid.Parse(taskIDParam)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid task ID"})
+		return
+	}
+	comment.TaskID = taskID
+	comment.CreatedAt = time.Now()
+
+	userID, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "UserID not found in context"})
+		return
+	}
+
+	userIDStr, ok := userID.(string)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID type"})
+		return
+	}
+
+	comment.UserID, _ = uuid.Parse(userIDStr)
+
+	if err := h.repo.CreateComment(&comment); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create comment"})
+		return
+	}
+
+	c.JSON(http.StatusCreated, comment)
+}
+
+func (h *TaskHandler) GetCommentsByTaskID(c *gin.Context) {
+	taskIDParam := c.Param("task_id")
+	taskID, err := uuid.Parse(taskIDParam)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid task ID"})
+		return
+	}
+
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
+	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+
+	comments, err := h.repo.GetCommentsByTaskID(taskID, limit, offset)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch comments"})
+		return
+	}
+
+	c.JSON(http.StatusOK, comments)
 }

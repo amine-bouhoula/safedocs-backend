@@ -77,7 +77,7 @@ func RegisterHandler() gin.HandlerFunc {
 		utils.Logger.Info("User registered successfully", zap.String("user", user.Firstname+" "+user.Lastname))
 
 		// Load the private key for JWT generation
-		privateKeyPEM, err := authservices.LoadPrivateKey("../keys/private_key.pem")
+		privateKeyPEM, err := authservices.LoadPrivateKey("./keys/private_key.pem")
 		if err != nil {
 			utils.Logger.Fatal("Failed to load private key", zap.Error(err))
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load private key"})
@@ -134,7 +134,7 @@ func LoginHandler() gin.HandlerFunc {
 		}
 
 		// Load the private key for JWT generation
-		privateKeyPEM, err := authservices.LoadPrivateKey("../keys/private_key.pem")
+		privateKeyPEM, err := authservices.LoadPrivateKey("./keys/private_key.pem")
 		if err != nil {
 			utils.Logger.Fatal("Failed to load private key", zap.Error(err))
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load private key"})
